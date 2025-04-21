@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Babylon.js GLB Model Viewer</title>
+    <style>
+        html, body {
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+        #fileInput {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #status {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            background: rgba(0,0,0,0.7);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+            z-index: 100;
+            text-align: center;
+        }
+        #error {
+            color: #ff6b6b;
+            margin-top: 10px;
+            font-size: 16px;
+        }
+        #help {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(255,255,255,0.8);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            max-width: 300px;
+        }
+    </style>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+</head>
+<body>
+    <input type="file" id="fileInput" accept=".glb,.gltf" />
+    <div id="help">
+        <strong>Управление:</strong><br>
+        - ЛКМ + движение: вращать модель<br>
+        - ПКМ + движение: двигать модель<br>
+        - Колесо мыши: приближать/отдалять
+    </div>
+    <div id="status">
+        <div id="statusText">Loading model...</div>
+        <div id="error"></div>
+    </div>
+    <canvas id="renderCanvas"></canvas>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const canvas = document.getElementById("renderCanvas");
+            const engine = new BABYLON.Engine(canvas, true);
+            const statusElement = document.getElementById('status');
+            const statusText = document.getElementById('statusText');
+            const errorElement = document.getElementById('error');
+            
+            // Create basic scene
+            const createScene = function() {
+                const scene = new BABYLON.Scene(engine);
+                scene.clearColor = new BABYLON.Color4(0.02, 0.02, 0.02, 1);
+                
+                // Add camera with more control options
+                const camera = new BABYLON.ArcRotateCamera("camera", -Math.PI / 2, Math.PI / 2, 5, BABYLON.Vector3.Zero(), scene);
+                camera.attachControl(canvas, false); // Disable default controls
+                camera.lowerRadiusLimit = 0.1;
+                camera.upperRadiusLimit = 100;
+                camera.wheelPrecision = 50; // For zooming with mouse wheel
+                camera.allowUpsideDown = false;
+                
+                // Add lights
+                const light1 = new BABYLON.HemisphericLight("light1", new BABYLON.Vector3(0, 1, 0), scene);
+                light1.intensity = 0.7;
+                const light2 = new BABYLON.DirectionalLight("light2", new BABYLON.Vector3(0, -1, 1), scene);
+                light2.intensity = 0.5;
+                
+                return scene;
+            };
+            
+            const scene = createScene();
+            let currentModelParent = null; // Parent node for the loaded model
+            
+            // File input handler
+            document.getElementById('fileInput').addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                showStatus("Loading model...");
+                errorElement.textContent = "";
+                
+                // Clear previous models
+                if (currentModelParent) {
+                    currentModelParent.dispose();
+                }
+                
+                currentModelParent = new BABYLON.TransformNode("modelParent", scene);
+                
+                const url = URL.createObjectURL(file);
+                const fileExtension = file.name.split('.').pop().toLowerCase();
+                
+                // Load model
+                BABYLON.SceneLoader.ImportMesh(
+                    "", 
+                    "", 
+                    url, 
+                    scene, 
+                    function(newMeshes) {
+                        try {
+                            // Parent all meshes to our model parent
+                            for (const mesh of newMeshes) {
+                                mesh.parent = currentModelParent;
+                            }
+                            
+                            centerModel(newMeshes);
+                            hideStatus();
+                        } catch (e) {
+                            showStatus("Error processing model", e.message);
+                            console.error("Model processing error:", e);
+                        }
+                        URL.revokeObjectURL(url);
+                    }, 
+                    null, 
+                    function(scene, message, exception) {
+                        let errorMsg = "Failed to load model";
+                        if (message) errorMsg += ": " + message;
+                        if (exception) errorMsg += " (Exception: " + exception.message + ")";
+                        
+                        showStatus("Error loading model", errorMsg);
+                        console.error("Model loading error:", message, exception);
+                        URL.revokeObjectURL(url);
+                    }, 
+                    "." + fileExtension
+                );
+            });
+            
+            // Helper functions
+            function centerModel(meshes) {
+                if (meshes.length === 0) return;
+                
+                // Create a temporary parent mesh to calculate bounds
+                const tempParent = new BABYLON.Mesh("tempParent", scene);
+                for (const mesh of meshes) {
+                    mesh.parent = tempParent;
+                }
+                
+                // Get the combined bounding box
+                const boundingInfo = tempParent.getHierarchyBoundingVectors();
+                const size = boundingInfo.max.subtract(boundingInfo.min);
+                const center = boundingInfo.min.add(size.scale(0.5));
+                
+                // Remove parent and center all meshes
+                for (const mesh of meshes) {
+                    mesh.parent = currentModelParent;
+                    mesh.position.subtractInPlace(center);
+                }
+                
+                tempParent.dispose();
+                
+                const maxSize = Math.max(size.x, size.y, size.z);
+                const camera = scene.getCameraByName("camera");
+                if (camera) {
+                    camera.radius = maxSize * 2;
+                    camera.target = BABYLON.Vector3.Zero();
+                }
+            }
+            
+            function showStatus(message, error = "") {
+                statusText.textContent = message;
+                errorElement.textContent = error || "";
+                statusElement.style.display = 'block';
+            }
+            
+            function hideStatus() {
+                statusElement.style.display = 'none';
+            }
+            
+            // Custom controls
+            function setupControls() {
+                const camera = scene.activeCamera;
+                let isRotating = false;
+                let isMoving = false;
+                let lastX, lastY;
+                
+                canvas.addEventListener('pointerdown', (e) => {
+                    if (!currentModelParent) return;
+                    
+                    if (e.button === 0) { // Left button
+                        isRotating = true;
+                    } else if (e.button === 2) { // Right button
+                        isMoving = true;
+                    }
+                    
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    canvas.style.cursor = 'grabbing';
+                });
+                
+                canvas.addEventListener('pointerup', () => {
+                    isRotating = false;
+                    isMoving = false;
+                    canvas.style.cursor = 'grab';
+                });
+                
+                canvas.addEventListener('pointermove', (e) => {
+                    if (!currentModelParent) return;
+                    
+                    const deltaX = e.clientX - lastX;
+                    const deltaY = e.clientY - lastY;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    
+                    if (isRotating) {
+                        // Rotate model
+                        const rotationSpeed = 0.01;
+                        currentModelParent.rotation.y -= deltaX * rotationSpeed;
+                        currentModelParent.rotation.x -= deltaY * rotationSpeed;
+                    } else if (isMoving) {
+                        // Move model
+                        const moveSpeed = camera.radius * 0.001;
+                        currentModelParent.position.x += deltaX * moveSpeed;
+                        currentModelParent.position.y -= deltaY * moveSpeed;
+                    }
+                });
+                
+                // Mouse wheel for zoom
+                canvas.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    if (!currentModelParent) return;
+                    
+                    const zoomSpeed = 0.001;
+                    const direction = camera.getTarget().subtract(camera.position).normalize();
+                    currentModelParent.position.addInPlace(direction.scale(e.deltaY * zoomSpeed));
+                });
+                
+                // Prevent context menu on right click
+                canvas.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                });
+            }
+            
+            // Initialize controls
+            setupControls();
+            
+            // Run render loop
+            engine.runRenderLoop(function() {
+                scene.render();
+            });
+            
+            // Handle window resize
+            window.addEventListener('resize', function() {
+                engine.resize();
+            });
+        });
+    </script>
+</body>
+</html>
