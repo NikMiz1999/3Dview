@@ -135,6 +135,7 @@
                             // Parent all meshes to our model parent
                             for (const mesh of newMeshes) {
                                 mesh.parent = currentModelParent;
+                                mesh.scaling.x *= -1;
                             }
                             
                             centerModel(newMeshes);
@@ -202,67 +203,127 @@
             
             // Custom controls
             function setupControls() {
-                const camera = scene.activeCamera;
-                let isRotating = false;
-                let isMoving = false;
-                let lastX, lastY;
-                
-                canvas.addEventListener('pointerdown', (e) => {
-                    if (!currentModelParent) return;
-                    
-                    if (e.button === 0) { // Left button
-                        isRotating = true;
-                    } else if (e.button === 2) { // Right button
-                        isMoving = true;
-                    }
-                    
-                    lastX = e.clientX;
-                    lastY = e.clientY;
-                    canvas.style.cursor = 'grabbing';
-                });
-                
-                canvas.addEventListener('pointerup', () => {
-                    isRotating = false;
-                    isMoving = false;
-                    canvas.style.cursor = 'grab';
-                });
-                
-                canvas.addEventListener('pointermove', (e) => {
-                    if (!currentModelParent) return;
-                    
-                    const deltaX = e.clientX - lastX;
-                    const deltaY = e.clientY - lastY;
-                    lastX = e.clientX;
-                    lastY = e.clientY;
-                    
-                    if (isRotating) {
-                        // Rotate model
-                        const rotationSpeed = 0.01;
-                        currentModelParent.rotation.y -= deltaX * rotationSpeed;
-                        currentModelParent.rotation.x -= deltaY * rotationSpeed;
-                    } else if (isMoving) {
-                        // Move model
-                        const moveSpeed = camera.radius * 0.001;
-                        currentModelParent.position.x += deltaX * moveSpeed;
-                        currentModelParent.position.y -= deltaY * moveSpeed;
-                    }
-                });
-                
-                // Mouse wheel for zoom
-                canvas.addEventListener('wheel', (e) => {
-                    e.preventDefault();
-                    if (!currentModelParent) return;
-                    
-                    const zoomSpeed = 0.001;
-                    const direction = camera.getTarget().subtract(camera.position).normalize();
-                    currentModelParent.position.addInPlace(direction.scale(e.deltaY * zoomSpeed));
-                });
-                
-                // Prevent context menu on right click
-                canvas.addEventListener('contextmenu', (e) => {
-                    e.preventDefault();
-                });
-            }
+    const camera = scene.activeCamera;
+    let isDragging = false;
+    let lastX, lastY;
+
+    // Создаем сферу-манипулятор (как в Metashape)
+    const createRotationGizmo = () => {
+        const gizmo = new BABYLON.Mesh("rotationGizmo", scene);
+        gizmo.isPickable = true;
+
+        // Создаем прозрачную сферу для захвата вращения
+        const sphere = BABYLON.MeshBuilder.CreateSphere("gizmoSphere", { diameter: 20 }, scene);
+        sphere.parent = gizmo;
+        sphere.material = new BABYLON.StandardMaterial("gizmoMat", scene);
+        sphere.material.alpha = 0.3;
+        sphere.material.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+        sphere.material.specularColor = new BABYLON.Color3(0, 0, 0);
+
+        // Оси X, Y, Z (как в Metashape)
+        const axisX = BABYLON.MeshBuilder.CreateLines("axisX", { 
+            points: [
+                new BABYLON.Vector3(0, 0, 0),
+                new BABYLON.Vector3(8, 0, 0)
+            ],
+            colors: [
+                new BABYLON.Color4(1, 0, 0, 1),
+                new BABYLON.Color4(1, 0, 0, 1)
+            ]
+        }, scene);
+        axisX.parent = gizmo;
+
+        const axisY = BABYLON.MeshBuilder.CreateLines("axisY", { 
+            points: [
+                new BABYLON.Vector3(0, 0, 0),
+                new BABYLON.Vector3(0, 1.5, 0)
+            ],
+            colors: [
+                new BABYLON.Color4(0, 1, 0, 1),
+                new BABYLON.Color4(0, 1, 0, 1)
+            ]
+        }, scene);
+        axisY.parent = gizmo;
+
+        const axisZ = BABYLON.MeshBuilder.CreateLines("axisZ", { 
+            points: [
+                new BABYLON.Vector3(0, 0, 0),
+                new BABYLON.Vector3(0, 0, 1.5)
+            ],
+            colors: [
+                new BABYLON.Color4(0, 0, 1, 1),
+                new BABYLON.Color4(0, 0, 1, 1)
+            ]
+        }, scene);
+        axisZ.parent = gizmo;
+
+        return gizmo;
+    };
+
+    const rotationGizmo = createRotationGizmo();
+    rotationGizmo.setEnabled(false); // Сначала скрываем, пока не загружена модель
+
+    // Обновляем позицию контрола при загрузке модели
+    const updateGizmoPosition = () => {
+        if (!currentModelParent) return;
+        rotationGizmo.position = currentModelParent.position.clone();
+        rotationGizmo.setEnabled(true);
+    };
+
+    // При загрузке модели активируем контрол
+    scene.onBeforeRenderObservable.add(() => {
+        if (currentModelParent) {
+            updateGizmoPosition();
+        }
+    });
+
+    // Вращение модели при перетаскивании по сфере
+    canvas.addEventListener('pointerdown', (e) => {
+        if (!currentModelParent) return;
+
+        const pickResult = scene.pick(e.clientX, e.clientY, (mesh) => mesh.name === "gizmoSphere");
+        if (pickResult.hit) {
+            isDragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            canvas.style.cursor = 'grabbing';
+        }
+    });
+
+    canvas.addEventListener('pointerup', () => {
+        isDragging = false;
+        canvas.style.cursor = 'grab';
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+        if (!isDragging || !currentModelParent) return;
+
+        const deltaX = e.clientX - lastX;
+        const deltaY = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+
+        // Вращение модели (как в Metashape)
+        const rotationSpeed = 0.01;
+        currentModelParent.rotation.y -= deltaX * rotationSpeed;
+        currentModelParent.rotation.x -= deltaY * rotationSpeed;
+    });
+
+    // Колесо мыши для масштабирования
+    canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        if (!currentModelParent) return;
+
+        const zoomSpeed = 0.001;
+        const direction = camera.getTarget().subtract(camera.position).normalize();
+        currentModelParent.position.addInPlace(direction.scale(e.deltaY * zoomSpeed));
+    });
+
+    // Блокируем контекстное меню
+    canvas.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+    });
+}
             
             // Initialize controls
             setupControls();
